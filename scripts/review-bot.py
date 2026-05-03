@@ -106,7 +106,8 @@ def main() -> int:
         f"{text}\n\n"
         f"---\n"
         f"_{meta['latency_s']}s · {meta['prompt_tokens']}+{meta['completion_tokens']} tokens · "
-        f"OpenShell-sandboxed · Infomaniak (Geneva, CH)_"
+        f"Inference via Infomaniak (Geneva, CH) · "
+        f"Egress audit: see `egress-audit-demo` job_"
     )
     post_comment(body)
     audit({
