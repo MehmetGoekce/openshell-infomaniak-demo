@@ -67,7 +67,7 @@ shipped no value. The honest path is to:
   self-hosted runner, that policy is what protects it there.
 
 For self-hosted-runner setups (where OpenShell's value is highest), see
-the migration notes in `docs/SETUP.md`.
+the migration outline at the bottom of `docs/SETUP.md`.
 
 ---
 
@@ -115,16 +115,15 @@ the model.
 
 ## Models you can switch to
 
-All five chat-capable models on Infomaniak as of May 2026, benchmarked on
-the same Python diff (~85 input tokens):
+Benchmarked on three real PR diffs from this repo (logic bug, hardcoded
+secret, missing tests). Numbers are per-PR median; full matrix and raw
+outputs in [`docs/MODELS.md`](docs/MODELS.md).
 
-| Model | Latency | Tokens out | Finish | Notes |
-|---|---|---|---|---|
-| `mistralai/Ministral-3-14B-Instruct-2512` | 0.68 s | 54 | stop | Fastest. Format-disciplined (`**Severity: Warn**`), concrete recommendations. Default for high-traffic repos. |
-| `google/gemma-4-31B-it` | 0.69 s | 43 | stop | Fast, terse, sometimes drops the severity tag. |
-| `swiss-ai/Apertus-70B-Instruct-2509` | 2.60 s | 69 | stop | Solid reasoning, Swiss provenance (Swiss AI Initiative, ETH/EPFL/CSCS). Default in this repo for the sovereignty story. |
-| `Qwen/Qwen3.5-122B-A10B-FP8` | 1.76 s | (200, length-cut) | length | Reasoning model — uses internal `reasoning` field, needs `max_tokens >= 1500`. Strong on multi-file PRs. |
-| `moonshotai/Kimi-K2.6` | 2.52 s | (200, length-cut) | length | Same reasoning-model behaviour as Qwen3.5. |
+| Model | Median latency | Strength | Watch out for |
+|---|---|---|---|
+| `mistralai/Ministral-3-14B-Instruct-2512` | **1.2 s** | Format-strict, multi-issue per diff, catches `NaN`/`Infinity` edge cases on `clamp()`. Production default. | Down-rates hardcoded-secret to `warn` instead of `error`. |
+| `swiss-ai/Apertus-70B-Instruct-2509` | 3.1 s (median) / 49 s (security topic) | Swiss provenance — Swiss AI Initiative (ETH / EPFL / CSCS). Solid on logic bugs. The sovereignty-story default. | Verbose spiral on security diffs (1500-token length-cut, 49 s); under-classifies hardcoded secret as `info`. Use Mistral for high-throughput, Apertus for reference. |
+| `Qwen/Qwen3.5-122B-A10B-FP8` | 10 s | **Best severity classification** on security and correctness; uses internal `reasoning` channel for chain-of-thought. | Reasoning model — needs `max_tokens ≥ 2500` (1500 cuts the answer). Slower. |
 
 Switch models without editing code:
 
@@ -132,9 +131,10 @@ Switch models without editing code:
 gh variable set INFOMANIAK_MODEL --body "mistralai/Ministral-3-14B-Instruct-2512"
 ```
 
-The reviewer script reads `INFOMANIAK_MODEL` and falls back to Apertus if
-unset. `scripts/review-bot.py` raises `max_tokens` to 1500 so reasoning
-models work without extra configuration.
+`scripts/review-bot.py` reads `INFOMANIAK_MODEL` (falls back to Apertus
+if unset) and sets `max_tokens=1500`. If you switch to Qwen3.5 or another
+reasoning model, raise `max_tokens` to 2500 — see `docs/MODELS.md` for
+the failure mode.
 
 ---
 
@@ -147,8 +147,10 @@ models work without extra configuration.
 ├── .github/workflows/ai-review.yml   # GH Actions wiring
 ├── sample-app/                       # tiny TS app for test PRs
 └── docs/
-    ├── test-prs/                     # three deliberately-flawed diffs
-    └── failure-modes.md              # what an egress violation looks like
+    ├── SETUP.md                     # 30-minute fork-to-first-PR walk-through
+    ├── MODELS.md                    # 3×3 model benchmark with raw outputs
+    ├── test-prs/                    # three deliberately-flawed diffs
+    └── failure-modes.md             # what an egress violation looks like
 ```
 
 ---
@@ -170,8 +172,8 @@ models work without extra configuration.
   value lands at full strength on a self-hosted runner (or a developer
   workstation). On GitHub-hosted runners we run the reviewer directly
   and use OpenShell as a per-PR egress audit. The architecture section
-  above explains why; the migration to self-hosted runners is in
-  `docs/SETUP.md`.
+  above explains why; the migration sketch for self-hosted runners is
+  at the bottom of `docs/SETUP.md`.
 - **Not** production-ready as-is. OpenShell is in alpha (May 2026).
   Expect rough edges around multi-tenant gateways, env-var forwarding,
   and GPU passthrough. For a single-developer or small-team rollout

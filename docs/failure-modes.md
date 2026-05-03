@@ -121,5 +121,5 @@ restrictions, even if it has full write access to the policy file.
   and for noticing when an agent (or a compromised dependency) tries
   something it shouldn't.
 
-For the audit-log schema and how to ship it to a SIEM, see
-`docs/SETUP.md` (forthcoming).
+For the audit-log schema and how to ship it to a SIEM, see the
+"Operating notes" section in [`docs/SETUP.md`](SETUP.md).
