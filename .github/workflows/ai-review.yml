@@ -47,6 +47,22 @@ jobs:
             --config OPENAI_BASE_URL="https://api.infomaniak.com/2/ai/${INFOMANIAK_PRODUCT_ID}/openai/v1"
           openshell inference set --provider infomaniak --model "$INFOMANIAK_MODEL"
 
+      - name: Sandbox layout diagnostic
+        continue-on-error: true
+        run: |
+          echo "Runner pwd: $(pwd)"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          openshell sandbox create --policy policy.yaml -- bash -c '
+            echo "--- inside sandbox ---"
+            echo "PWD: $PWD"
+            echo "HOME: $HOME"
+            echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+            echo "ls /:"
+            ls -la / 2>/dev/null | head -25
+            echo "find review-bot.py:"
+            find / -name review-bot.py 2>/dev/null
+          '
+
       - name: Run sandboxed AI review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -55,7 +71,7 @@ jobs:
           PYTHONPATH: /tmp/python-libs
         run: |
           openshell sandbox create --policy policy.yaml -- \
-            python3 scripts/review-bot.py
+            bash -c 'cd "$GITHUB_WORKSPACE" && python3 scripts/review-bot.py'
 
       - name: Upload audit log
         if: always()
