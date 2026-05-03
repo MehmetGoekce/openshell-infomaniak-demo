@@ -16,29 +16,58 @@ running in Geneva.
 
 ## Architecture
 
+The workflow runs two parallel jobs per PR:
+
 ```mermaid
 graph LR
-  PR[Pull Request] -->|opened/synchronize| GA[GitHub Actions runner]
-  GA -->|openshell sandbox create| SB[OpenShell sandbox]
-  SB -->|review-bot.py| PR_DIFF[gh pr diff]
-  SB -->|"POST inference.local/v1"| PROXY[OpenShell Privacy Router]
-  PROXY -->|"injects API token, rewrites URL"| INFO["api.infomaniak.com<br/>Geneva, Switzerland"]
-  INFO -->|"Apertus-70B response"| PROXY
-  PROXY --> SB
-  SB -->|"gh pr comment"| PR
-  SB -->|"audit/*.jsonl"| ART[workflow artifact]
+  PR[Pull Request] --> GA[GitHub Actions]
+  GA --> J1[Job 1: review]
+  GA --> J2[Job 2: egress-audit-demo]
+
+  J1 -->|gh pr diff| GH1[api.github.com]
+  J1 -->|HTTPS POST| INFO["api.infomaniak.com<br/>Geneva, Switzerland"]
+  INFO -->|Apertus-70B| J1
+  J1 -->|gh pr comment| PR
+  J1 -->|JSONL| ART1[review audit artifact]
+
+  J2 -->|"sandbox create<br/>policy.yaml"| SB[OpenShell sandbox]
+  SB -->|"curl api.openai.com<br/>(deliberately)"| LL[Landlock + proxy]
+  LL -->|DENY + log| ART2[egress audit artifact]
 
   classDef ch fill:#d70000,color:#fff,stroke:#fff
   class INFO ch
 ```
 
-Three layers, three answers:
+Three guarantees, two jobs:
 
-| Question | Answer |
-|---|---|
-| Where does the model run? | Geneva, Switzerland — Infomaniak data centre |
-| What can the reviewer reach? | Only `inference.local` (rewritten to Infomaniak) and `api.github.com`. Everything else denied at the kernel via Linux Landlock. |
-| Where's the proof? | `audit/*.jsonl` (uploaded as workflow artifact) plus `openshell logs` for denied egress attempts. |
+| Question | Answer | Where |
+|---|---|---|
+| Where does the model run? | Geneva, Switzerland — Infomaniak data centre. | Job 1 |
+| Does the reviewer ever talk to a US-hosted LLM? | No — `INFERENCE_BASE_URL` is wired to Infomaniak only. | Job 1 |
+| Can a hostile script egress to a non-allowlisted endpoint? | No — and we prove it on every PR by attempting it under OpenShell. | Job 2 |
+
+### Why two jobs?
+
+OpenShell is in alpha (May 2026) and its Hosted-Runner ergonomics are
+rough: env vars are not forwarded by default, the workdir is not mounted
+at the CWD, and the sandbox image is 1.3 GB. Trying to wrap the *real*
+reviewer inside OpenShell on a hosted runner cost us two failed runs and
+shipped no value. The honest path is to:
+
+- **Run the reviewer directly on the runner** (Job 1). Inference
+  sovereignty is preserved because the destination — Infomaniak —
+  is what carries that property. OpenShell's role on a hosted runner
+  is filesystem and per-binary-egress isolation, neither of which adds
+  meaningful protection on a single-tenant ephemeral runner that
+  GitHub already isolates between jobs.
+- **Run a focused OpenShell egress proof in parallel** (Job 2). It
+  spawns the same `policy.yaml` and tries to egress to `api.openai.com`.
+  A green check on this job is a per-PR audit record that the policy
+  denies non-allowlisted egress. If you ever ship the reviewer to a
+  self-hosted runner, that policy is what protects it there.
+
+For self-hosted-runner setups (where OpenShell's value is highest), see
+the migration notes in `docs/SETUP.md`.
 
 ---
 
@@ -132,14 +161,21 @@ models work without extra configuration.
   hosting is a separate problem with separate answers (GitLab self-hosted,
   Forgejo on your own VPS). The pattern in `policy.yaml` and
   `review-bot.py` ports 1:1 to GitLab CI or Bitbucket Pipelines.
-- **Not** a content-DLP. OpenShell controls *where* the agent can send
+- **Not** a content-DLP. OpenShell controls *where* an agent can send
   data, not *what*. If a malicious instruction in the diff itself
   convinces the model to leak something *to Infomaniak* (which is allowed),
-  no policy here catches that. Pair this with prompt-injection defenses if
+  no policy here catches that. Pair with prompt-injection defenses if
   that's in your threat model.
-- **Not** production-ready as-is. OpenShell is in alpha. Expect rough
-  edges around multi-tenant gateways and GPU passthrough. For a
-  single-developer or small-team rollout it's stable enough to use today.
+- **Not** OpenShell-wrapped end-to-end on this runner. OpenShell's
+  value lands at full strength on a self-hosted runner (or a developer
+  workstation). On GitHub-hosted runners we run the reviewer directly
+  and use OpenShell as a per-PR egress audit. The architecture section
+  above explains why; the migration to self-hosted runners is in
+  `docs/SETUP.md`.
+- **Not** production-ready as-is. OpenShell is in alpha (May 2026).
+  Expect rough edges around multi-tenant gateways, env-var forwarding,
+  and GPU passthrough. For a single-developer or small-team rollout
+  it's stable enough to use today.
 
 ---
 
