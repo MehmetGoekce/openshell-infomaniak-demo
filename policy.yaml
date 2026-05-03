@@ -1,0 +1,61 @@
+# OpenShell policy for the AI PR-reviewer sandbox.
+#
+# Threat model: the sandbox runs an LLM-driven Python script with access to PR
+# content. Without per-binary egress control, a compromised dependency or
+# prompt-injection payload could exfiltrate the diff to an attacker-controlled
+# host. This policy enforces:
+#
+#   - Python may reach ONLY inference.local (rewritten to Infomaniak by the
+#     OpenShell Privacy Router).
+#   - gh CLI may reach ONLY api.github.com (read PR, post review comment).
+#   - Anything else is denied at the kernel level (Landlock) and audited.
+
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+  read_write:
+    - /sandbox
+    - /tmp
+
+landlock:
+  compatibility: best_effort
+
+network_policies:
+  inference:
+    name: infomaniak-inference
+    endpoints:
+      - host: inference.local
+        port: 443
+    binaries:
+      - path: /usr/bin/python3
+      - path: /usr/bin/python3.12
+      - path: /usr/local/bin/python3
+
+  github_api:
+    name: github-rest-api
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        access: read-write
+    binaries:
+      - path: /usr/bin/gh
+      - path: /usr/local/bin/gh
+
+  # Intentionally NOT listed:
+  # - api.openai.com         (no leakage to US-hosted inference)
+  # - api.anthropic.com      (same)
+  # - api.infomaniak.com     (must go through inference.local Privacy Router)
+  # - registry.npmjs.org     (sample-app build runs in a separate job)
+  # - pypi.org               (Python deps are pre-installed in the workflow step)
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox

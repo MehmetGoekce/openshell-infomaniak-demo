@@ -1,0 +1,73 @@
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    env:
+      INFOMANIAK_PRODUCT_ID: ${{ vars.INFOMANIAK_PRODUCT_ID }}
+      INFOMANIAK_MODEL: ${{ vars.INFOMANIAK_MODEL || 'swiss-ai/Apertus-70B-Instruct-2509' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Linux kernel supports Landlock
+        run: |
+          uname -r
+          test -f /proc/self/status && grep -E '^Seccomp' /proc/self/status || true
+          # Landlock ABI v3+ requires 6.2+; v4 (TCP networking) requires 6.7+.
+          # ubuntu-24.04 ships 6.8, so this is informational.
+
+      - name: Install Python deps to /tmp/python-libs (sandbox-readable)
+        # /tmp is read_write in policy.yaml; the sandbox can import from PYTHONPATH.
+        run: |
+          python3 -m pip install --target=/tmp/python-libs openai
+
+      - name: Install OpenShell
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/uv" tool install -U openshell
+
+      - name: Start gateway and configure Privacy Router → Infomaniak
+        env:
+          INFOMANIAK_API_TOKEN: ${{ secrets.INFOMANIAK_API_TOKEN }}
+        run: |
+          openshell gateway start
+          openshell provider create \
+            --name infomaniak \
+            --type openai \
+            --credential OPENAI_API_KEY="$INFOMANIAK_API_TOKEN" \
+            --config OPENAI_BASE_URL="https://api.infomaniak.com/2/ai/${INFOMANIAK_PRODUCT_ID}/openai/v1"
+          openshell inference set --provider infomaniak --model "$INFOMANIAK_MODEL"
+
+      - name: Run sandboxed AI review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PYTHONPATH: /tmp/python-libs
+        run: |
+          openshell sandbox create --policy policy.yaml -- \
+            python3 scripts/review-bot.py
+
+      - name: Upload audit log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-review-audit-pr-${{ github.event.pull_request.number }}
+          path: audit/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload OpenShell denied-egress log
+        if: always()
+        run: |
+          openshell logs --since 1h --json > openshell-events.jsonl || true
+        continue-on-error: true
