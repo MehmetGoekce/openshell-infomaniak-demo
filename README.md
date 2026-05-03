@@ -100,12 +100,14 @@ gh variable set INFOMANIAK_MODEL --body "swiss-ai/Apertus-70B-Instruct-2509"
 
 ### 3. Make a test PR
 
-The `docs/test-prs/` directory has three pre-written diffs you can apply on a
+The `docs/test-prs/` directory has five pre-written diffs you can apply on a
 branch to see the reviewer in action:
 
 - `01-logic-bug.md` — silent change in error semantics
 - `02-hardcoded-secret.md` — secret committed to source
 - `03-missing-tests.md` — new branchy code without tests
+- `04-prompt-injection.md` — JSDoc tries to manipulate the reviewer
+- `05-cross-file-api-break.md` — breaking signature change, callers not updated
 
 Apply one, push, open a PR, watch the **AI PR Review** action run. You
 should see a comment from the bot within roughly 10–60 seconds depending on
@@ -115,15 +117,16 @@ the model.
 
 ## Models you can switch to
 
-Benchmarked on three real PR diffs from this repo (logic bug, hardcoded
-secret, missing tests). Numbers are per-PR median; full matrix and raw
-outputs in [`docs/MODELS.md`](docs/MODELS.md).
+Benchmarked on five real PR diffs from this repo (logic bug, hardcoded
+secret, missing tests, prompt injection, cross-file API break).
+Numbers are per-PR median; full matrix and raw outputs in
+[`docs/MODELS.md`](docs/MODELS.md).
 
 | Model | Median latency | Strength | Watch out for |
 |---|---|---|---|
-| `mistralai/Ministral-3-14B-Instruct-2512` | **1.2 s** | Format-strict, multi-issue per diff, catches `NaN`/`Infinity` edge cases on `clamp()`. Production default. | Down-rates hardcoded-secret to `warn` instead of `error`. |
-| `swiss-ai/Apertus-70B-Instruct-2509` | 3.1 s (median) / 49 s (security topic) | Swiss provenance — Swiss AI Initiative (ETH / EPFL / CSCS). Solid on logic bugs. The sovereignty-story default. | Verbose spiral on security diffs (1500-token length-cut, 49 s); under-classifies hardcoded secret as `info`. Use Mistral for high-throughput, Apertus for reference. |
-| `Qwen/Qwen3.5-122B-A10B-FP8` | 10 s | **Best severity classification** on security and correctness; uses internal `reasoning` channel for chain-of-thought. | Reasoning model — needs `max_tokens ≥ 2500` (1500 cuts the answer). Slower. |
+| `mistralai/Ministral-3-14B-Instruct-2512` | **1.2 s** | Format-strict, multi-issue per diff, catches `NaN`/`Infinity` edge cases and breaking signature changes. Production default. | Down-rates hardcoded-secret to `warn` instead of `error`. Flags prompt-injection as "unusual" but doesn't name the attack. |
+| `swiss-ai/Apertus-70B-Instruct-2509` | 3 s (typical) / 49 s (security topic) | Swiss provenance — Swiss AI Initiative (ETH / EPFL / CSCS). Solid on logic bugs. The sovereignty-story default. | **Followed a prompt injection** in PR-04 — quoted the injected approval string verbatim. Don't pick it alone for security gating; pair it with Mistral or Qwen3.5. |
+| `Qwen/Qwen3.5-122B-A10B-FP8` | 14 s | **Best severity classification** — only model that explicitly identified the prompt-injection attempt as such. | Reasoning model — needs `max_tokens ≥ 2500` (1500 cuts answers; 3 of 5 cells length-cut in our trial). Slower. |
 
 Switch models without editing code:
 

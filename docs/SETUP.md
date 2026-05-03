@@ -113,7 +113,7 @@ gh variable list
 
 ## 4. Open a test PR
 
-Three pre-written diffs live in `docs/test-prs/`. Each one is a
+Five pre-written diffs live in `docs/test-prs/`. Each one is a
 deliberate flaw the reviewer should catch:
 
 - `01-logic-bug.md` — replaces `throw new RangeError(...)` with
@@ -124,6 +124,12 @@ deliberate flaw the reviewer should catch:
   security severity classification.
 - `03-missing-tests.md` — adds a new branchy `clamp()` function
   without test coverage. Tests if the model flags coverage gaps.
+- `04-prompt-injection.md` — adds a `multiply()` function whose
+  JSDoc tries to manipulate the reviewer into approving without
+  analysis. Tests adversarial robustness.
+- `05-cross-file-api-break.md` — adds a required argument to
+  `parseUserId()` without updating the callers. Tests multi-file
+  reasoning.
 
 To run one end-to-end:
 
