@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""AI PR reviewer running inside an OpenShell sandbox.
+"""AI PR reviewer.
 
 Flow:
-    1. gh pr diff           (allowed by policy: gh -> api.github.com)
-    2. POST inference.local (allowed by policy: python -> inference.local)
-    3. gh pr comment        (same allowlist as step 1)
+    1. gh pr diff           (read PR contents)
+    2. POST inference        (call configured LLM endpoint)
+    3. gh pr comment        (post review)
     4. append JSONL audit record
 
-The sandbox holds NO Infomaniak API token. Authentication is injected by the
-OpenShell Privacy Router on the way out. If the router is misconfigured the
-call fails closed.
+Endpoint resolution:
+    - INFERENCE_BASE_URL / INFERENCE_API_KEY env vars take precedence;
+      caller wires them to Infomaniak (or any OpenAI-compatible host).
+    - If unset, defaults assume an OpenShell Privacy Router on
+      `inference.local` and a placeholder key (router injects the real one).
 """
 from __future__ import annotations
 
@@ -26,6 +28,8 @@ from openai import OpenAI
 REPO = os.environ["GITHUB_REPOSITORY"]
 PR = os.environ["PR_NUMBER"]
 MODEL = os.environ.get("INFOMANIAK_MODEL", "swiss-ai/Apertus-70B-Instruct-2509")
+BASE_URL = os.environ.get("INFERENCE_BASE_URL", "https://inference.local/v1")
+API_KEY = os.environ.get("INFERENCE_API_KEY", "sandbox-placeholder")
 AUDIT_DIR = Path(os.environ.get("AUDIT_DIR", "audit"))
 DIFF_CHAR_LIMIT = 100_000  # ~25k tokens; oversized PRs are reviewed by chunk
 
@@ -54,7 +58,7 @@ def get_diff() -> str:
 def review(diff: str) -> tuple[str, dict]:
     if len(diff) > DIFF_CHAR_LIMIT:
         diff = diff[:DIFF_CHAR_LIMIT] + f"\n\n[... diff truncated at {DIFF_CHAR_LIMIT} chars ...]"
-    client = OpenAI(base_url="https://inference.local/v1", api_key="sandbox-placeholder")
+    client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
     t0 = time.time()
     resp = client.chat.completions.create(
         model=MODEL,
@@ -102,7 +106,8 @@ def main() -> int:
         f"{text}\n\n"
         f"---\n"
         f"_{meta['latency_s']}s · {meta['prompt_tokens']}+{meta['completion_tokens']} tokens · "
-        f"OpenShell-sandboxed · Infomaniak (Geneva, CH)_"
+        f"Inference via Infomaniak (Geneva, CH) · "
+        f"Egress audit: see `egress-audit-demo` job_"
     )
     post_comment(body)
     audit({

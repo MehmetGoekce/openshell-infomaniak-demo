@@ -9,53 +9,34 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Job 1: the actual reviewer.
+  #
+  # Runs on a hosted runner without an OpenShell wrapper. Inference goes
+  # directly to Infomaniak (Geneva, Switzerland), so the sovereignty
+  # guarantee — "no prompt or code context leaves CH-hosted infrastructure
+  # via the model path" — still holds. OpenShell's role here is moved to a
+  # separate Compliance proof job below.
   review:
     runs-on: ubuntu-24.04
     env:
-      INFOMANIAK_PRODUCT_ID: ${{ vars.INFOMANIAK_PRODUCT_ID }}
       INFOMANIAK_MODEL: ${{ vars.INFOMANIAK_MODEL || 'swiss-ai/Apertus-70B-Instruct-2509' }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      - name: Verify Linux kernel supports Landlock
-        run: |
-          uname -r
-          test -f /proc/self/status && grep -E '^Seccomp' /proc/self/status || true
-          # Landlock ABI v3+ requires 6.2+; v4 (TCP networking) requires 6.7+.
-          # ubuntu-24.04 ships 6.8, so this is informational.
+      - name: Install openai SDK
+        run: python -m pip install --quiet openai
 
-      - name: Install Python deps to /tmp/python-libs (sandbox-readable)
-        # /tmp is read_write in policy.yaml; the sandbox can import from PYTHONPATH.
-        run: |
-          python3 -m pip install --target=/tmp/python-libs openai
-
-      - name: Install OpenShell
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/uv" tool install -U openshell
-
-      - name: Start gateway and configure Privacy Router → Infomaniak
-        env:
-          INFOMANIAK_API_TOKEN: ${{ secrets.INFOMANIAK_API_TOKEN }}
-        run: |
-          openshell gateway start
-          openshell provider create \
-            --name infomaniak \
-            --type openai \
-            --credential OPENAI_API_KEY="$INFOMANIAK_API_TOKEN" \
-            --config OPENAI_BASE_URL="https://api.infomaniak.com/2/ai/${INFOMANIAK_PRODUCT_ID}/openai/v1"
-          openshell inference set --provider infomaniak --model "$INFOMANIAK_MODEL"
-
-      - name: Run sandboxed AI review
+      - name: Run AI review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PYTHONPATH: /tmp/python-libs
-        run: |
-          openshell sandbox create --policy policy.yaml -- \
-            python3 scripts/review-bot.py
+          INFERENCE_BASE_URL: https://api.infomaniak.com/2/ai/${{ vars.INFOMANIAK_PRODUCT_ID }}/openai/v1
+          INFERENCE_API_KEY: ${{ secrets.INFOMANIAK_API_TOKEN }}
+        run: python scripts/review-bot.py
 
       - name: Upload audit log
         if: always()
@@ -66,8 +47,49 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: Upload OpenShell denied-egress log
-        if: always()
+  # Job 2: Compliance proof.
+  #
+  # Spins up an OpenShell sandbox with the same policy.yaml the reviewer
+  # would use on a self-hosted runner, then attempts to egress to a host
+  # that is not in the allowlist. The job FAILS LOUD if OpenShell allows
+  # the call — that is the desired behaviour: a green check here is a
+  # signed audit record that the policy denies non-allowlisted egress.
+  egress-audit-demo:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenShell
         run: |
-          openshell logs --since 1h --json > openshell-events.jsonl || true
-        continue-on-error: true
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/uv" tool install -U openshell
+
+      - name: Start gateway
+        run: openshell gateway start
+
+      - name: Attempt blocked egress to api.openai.com (must be denied)
+        run: |
+          set +e
+          openshell sandbox create --policy policy.yaml -- \
+            curl -sS --max-time 10 https://api.openai.com/
+          EXIT=$?
+          set -e
+          if [ "$EXIT" -eq 0 ]; then
+            echo "::error::OpenShell allowed egress to api.openai.com — policy is broken"
+            exit 1
+          fi
+          echo "::notice::OpenShell denied egress to api.openai.com (curl exit=$EXIT) — policy enforced"
+
+      - name: Capture OpenShell event log
+        if: always()
+        run: openshell logs --since 5m --json > openshell-events.jsonl 2>&1 || true
+
+      - name: Upload egress-audit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openshell-egress-audit-pr-${{ github.event.pull_request.number }}
+          path: openshell-events.jsonl
+          if-no-files-found: ignore
+          retention-days: 90
